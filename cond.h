@@ -179,9 +179,21 @@ static void cond_ggml_forward(CondGGML * m,
     // Linear embed: [1024, S_lyric] -> [2048, S_lyric]
     struct ggml_tensor * lyric_h = qwen3_linear_bias(ctx, m->lyric_embed_w,
                                                       m->lyric_embed_b, t_lyric_in);
-    // 8 layers + final norm (bidirectional: mask=NULL)
-    lyric_h = qwen3_build_layers(ctx, m->lyric_cfg, m->lyric_layers, m->lyric_norm,
-                                  lyric_h, lyric_pos, NULL, S_lyric);
+
+    // Bidirectional sliding window mask for even layers (|i-j| <= 128)
+    // Python: layer_types = [sliding, full, sliding, full, ...]
+    // sliding_window = 128
+    struct ggml_tensor * lyric_slide_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, S_lyric, S_lyric);
+    ggml_set_name(lyric_slide_mask, "lyric_slide_mask");
+    ggml_set_input(lyric_slide_mask);
+
+    // 8 layers with alternating masks + final norm
+    for (int i = 0; i < m->lyric_cfg.n_layers; i++) {
+        struct ggml_tensor * layer_mask = (i % 2 == 0) ? lyric_slide_mask : NULL;
+        lyric_h = qwen3_build_layer(ctx, m->lyric_cfg, &m->lyric_layers[i],
+                                     lyric_h, lyric_pos, layer_mask, S_lyric);
+    }
+    lyric_h = qwen3_rms_norm(ctx, lyric_h, m->lyric_norm, m->lyric_cfg.rms_norm_eps);
 
     ggml_set_name(lyric_h, "lyric_out");
     ggml_set_output(lyric_h);
@@ -200,6 +212,7 @@ static void cond_ggml_forward(CondGGML * m,
     struct ggml_tensor * timbre_out = NULL;
     struct ggml_tensor * t_timbre_in = NULL;
     struct ggml_tensor * timbre_pos = NULL;
+    struct ggml_tensor * timbre_slide_mask = NULL;
 
     if (has_timbre) {
         timbre_pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, S_ref);
@@ -213,9 +226,19 @@ static void cond_ggml_forward(CondGGML * m,
         // Linear embed: [64, S_ref] -> [2048, S_ref]
         struct ggml_tensor * timbre_h = qwen3_linear_bias(ctx, m->timbre_embed_w,
                                                            m->timbre_embed_b, t_timbre_in);
-        // 4 layers + final norm
-        timbre_h = qwen3_build_layers(ctx, m->timbre_cfg, m->timbre_layers, m->timbre_norm,
-                                       timbre_h, timbre_pos, NULL, S_ref);
+
+        // Bidirectional sliding window mask for even layers
+        timbre_slide_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, S_ref, S_ref);
+        ggml_set_name(timbre_slide_mask, "timbre_slide_mask");
+        ggml_set_input(timbre_slide_mask);
+
+        // 4 layers with alternating masks + final norm
+        for (int i = 0; i < m->timbre_cfg.n_layers; i++) {
+            struct ggml_tensor * layer_mask = (i % 2 == 0) ? timbre_slide_mask : NULL;
+            timbre_h = qwen3_build_layer(ctx, m->timbre_cfg, &m->timbre_layers[i],
+                                          timbre_h, timbre_pos, layer_mask, S_ref);
+        }
+        timbre_h = qwen3_rms_norm(ctx, timbre_h, m->timbre_norm, m->timbre_cfg.rms_norm_eps);
 
         // Take first frame: [2048, S_ref] -> view [2048, 1]
         timbre_out = ggml_view_2d(ctx, timbre_h, H, 1,
@@ -242,11 +265,39 @@ static void cond_ggml_forward(CondGGML * m,
         ggml_backend_tensor_set(lyric_pos, pos.data(), 0, S_lyric * sizeof(int));
     }
 
+    // Lyric sliding window mask: bidirectional, |i-j| <= 128
+    {
+        const int W = 128;
+        std::vector<uint16_t> mask_data(S_lyric * S_lyric);
+        for (int i = 0; i < S_lyric; i++) {
+            for (int j = 0; j < S_lyric; j++) {
+                int d = i - j; if (d < 0) d = -d;
+                mask_data[i * S_lyric + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
+            }
+        }
+        ggml_backend_tensor_set(lyric_slide_mask, mask_data.data(), 0,
+                                 S_lyric * S_lyric * sizeof(uint16_t));
+        fprintf(stderr, "[CondEnc] Lyric sliding mask: %dx%d, window=%d\n", S_lyric, S_lyric, W);
+    }
+
     if (has_timbre) {
         ggml_backend_tensor_set(t_timbre_in, timbre_feats, 0, 64 * S_ref * sizeof(float));
         std::vector<int> pos(S_ref);
         for (int i = 0; i < S_ref; i++) pos[i] = i;
         ggml_backend_tensor_set(timbre_pos, pos.data(), 0, S_ref * sizeof(int));
+
+        // Timbre sliding window mask: bidirectional, |i-j| <= 128
+        const int W = 128;
+        std::vector<uint16_t> mask_data(S_ref * S_ref);
+        for (int i = 0; i < S_ref; i++) {
+            for (int j = 0; j < S_ref; j++) {
+                int d = i - j; if (d < 0) d = -d;
+                mask_data[i * S_ref + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
+            }
+        }
+        ggml_backend_tensor_set(timbre_slide_mask, mask_data.data(), 0,
+                                 S_ref * S_ref * sizeof(uint16_t));
+        fprintf(stderr, "[CondEnc] Timbre sliding mask: %dx%d, window=%d\n", S_ref, S_ref, W);
     }
 
     // Compute
