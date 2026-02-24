@@ -237,14 +237,14 @@ int main(int argc, char ** argv) {
 
         // Extract params
         const char * caption  = req.caption.c_str();
-        const char * lyrics   = req.lyrics.empty() ? "[Instrumental]" : req.lyrics.c_str();
+        const char * lyrics   = req.lyrics.c_str();
         char bpm_str[16] = "N/A";
         if (req.bpm > 0) snprintf(bpm_str, sizeof(bpm_str), "%d", req.bpm);
         const char * bpm      = bpm_str;
         const char * keyscale = req.keyscale.empty() ? "N/A" : req.keyscale.c_str();
         const char * timesig  = req.timesignature.empty() ? "N/A" : req.timesignature.c_str();
         const char * language = req.vocal_language.empty() ? "en" : req.vocal_language.c_str();
-        float duration        = req.duration > 0 ? req.duration : 120.0f;
+        float duration        = req.duration > 0 ? req.duration : 30.0f;
         long long seed        = req.seed;
         int num_steps         = req.inference_steps > 0 ? req.inference_steps : 8;
         float guidance_scale  = req.guidance_scale > 0 ? req.guidance_scale : 7.0f;
@@ -317,9 +317,8 @@ int main(int argc, char ** argv) {
             + "# Caption\n" + caption + "\n\n"
             + "# Metas\n" + metas + "<|endoftext|>\n";
 
-        bool instrumental = (strcmp(lyrics, "[Instrumental]") == 0 || strcmp(lyrics, "[instrumental]") == 0);
         std::string lyric_str = std::string("# Languages\n") + language + "\n\n# Lyric\n"
-            + (instrumental ? "[Instrumental]" : lyrics) + "<|endoftext|>";
+            + lyrics + "<|endoftext|>";
 
         // 3. Tokenize
         auto text_ids  = bpe_encode(&tok, text_str.c_str(), true);

@@ -1282,7 +1282,10 @@ int main(int argc, char ** argv) {
     std::vector<AcePrompt> aces;  // populated by Phase 1 (simple or partial)
 
     // Preprocessor: simple mode generates lyrics + metas from caption
-    if (is_simple) {
+    // Skip all LM phases when user provides audio_codes (cover passthrough)
+    if (user_has_codes) {
+        fprintf(stderr, "[Cover] user audio_codes present, skipping LM phases\n");
+    } else if (is_simple) {
         fprintf(stderr, "[Simple] Inspiration\n");
 
         const char * sys =
@@ -1316,7 +1319,7 @@ int main(int argc, char ** argv) {
     bool has_all_metas = (ace_ref.bpm > 0 && ace_ref.duration > 0 &&
                           !ace_ref.keyscale.empty() && !ace_ref.timesignature.empty());
 
-    if (!has_all_metas) {
+    if (!user_has_codes && !has_all_metas) {
         // Partial-metas: Phase 1 with CFG to fill missing fields
         prompt = build_lm_prompt(bpe, ace);
         std::vector<int> uncond;
