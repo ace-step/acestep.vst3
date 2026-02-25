@@ -1296,8 +1296,17 @@ int main(int argc, char ** argv) {
             prompt = build_lm_prompt(bpe, ace);
         }
         std::vector<int> uncond;
-        if (cfg_scale > 1.0f)
+        float fill_cfg = cfg_scale;
+        float fill_top_p = top_p;
+        int   fill_top_k = top_k;
+        if (need_lyrics) {
+            // lyrics generation: free sampling, no CFG (matches original behavior)
+            fill_cfg = 1.0f;
+            fill_top_p = 1.0f;
+            fill_top_k = 0;
+        } else if (fill_cfg > 1.0f) {
             uncond = build_lm_prompt_uncond(bpe, ace, neg_prompt);
+        }
 
         fsm.reset();
         if (need_lyrics && use_fsm && ace.vocal_language != "unknown" && !ace.vocal_language.empty())
@@ -1306,16 +1315,16 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "[Fill] lyrics=%s metas=%s | %zu tokens, CFG: %.2f, N=%d\n",
                 need_lyrics ? "generate" : "keep",
                 has_all_metas ? "complete" : "fill gaps",
-                prompt.size(), cfg_scale, batch_size);
+                prompt.size(), fill_cfg, batch_size);
 
         auto phase1_texts = generate_phase1_batch(
-            &model, &bpe, prompt, 2048, temperature, top_p, top_k,
+            &model, &bpe, prompt, 2048, temperature, fill_top_p, fill_top_k,
             seed, batch_size, use_fsm ? &fsm : nullptr, need_lyrics,
-            cfg_scale, uncond.empty() ? nullptr : &uncond, !need_lyrics);
+            fill_cfg, uncond.empty() ? nullptr : &uncond, !need_lyrics);
 
         parse_phase1_into_aces(phase1_texts, ace, aces, seed, "Fill", need_lyrics);
 
-        int n_kv_reset = (cfg_scale > 1.0f) ? 2 * batch_size : batch_size;
+        int n_kv_reset = (fill_cfg > 1.0f) ? 2 * batch_size : batch_size;
         for (int i = 0; i < n_kv_reset; i++) qw3lm_reset_kv(&model, i);
     }
 
