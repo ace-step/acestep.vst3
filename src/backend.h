@@ -22,10 +22,22 @@ struct BackendPair {
     int gpu_cc; // CUDA compute capability (e.g. 720 for sm_72), 0 if not CUDA
 };
 
+// Cached backend state (shared across all modules in the same binary)
+static BackendPair g_backend_cache = {};
+static int         g_backend_refs  = 0;
+
 // Initialize backends: load all available (CUDA, Metal, Vulkan...),
 // pick the best one, keep CPU as fallback.
 // label: log prefix, e.g. "DiT", "VAE", "LM"
+// Subsequent calls reuse the same backend (single VMM pool).
 static BackendPair backend_init(const char * label) {
+    if (g_backend_refs > 0) {
+        g_backend_refs++;
+        fprintf(stderr, "[Load] %s backend: %s (shared)\n",
+                label, ggml_backend_name(g_backend_cache.backend));
+        return g_backend_cache;
+    }
+
     ggml_backend_load_all();
     BackendPair bp = {};
     bp.backend = ggml_backend_init_best();
@@ -54,7 +66,20 @@ static BackendPair backend_init(const char * label) {
     }
 #endif
 
+    g_backend_cache = bp;
+    g_backend_refs = 1;
     return bp;
+}
+
+// Release a backend reference. Frees GPU + CPU backends when refcount hits 0.
+static void backend_release(ggml_backend_t backend, ggml_backend_t cpu_backend) {
+    if (g_backend_refs <= 0) return;
+    g_backend_refs--;
+    if (g_backend_refs == 0) {
+        if (backend && backend != cpu_backend) ggml_backend_free(backend);
+        if (cpu_backend) ggml_backend_free(cpu_backend);
+        g_backend_cache = {};
+    }
 }
 
 // Create a scheduler from a backend pair.

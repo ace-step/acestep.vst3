@@ -552,7 +552,6 @@ static void vae_ggml_free(VAEGGML * m) {
     if (m->sched) ggml_backend_sched_free(m->sched);
     if (m->buf) ggml_backend_buffer_free(m->buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
-    if (m->backend && m->backend != m->cpu_backend) ggml_backend_free(m->backend);
-    if (m->cpu_backend) ggml_backend_free(m->cpu_backend);
+    backend_release(m->backend, m->cpu_backend);
     *m = {};
 }

@@ -467,8 +467,7 @@ static void qwen3_embed_lookup(Qwen3GGML * m, const int * token_ids, int S, floa
 // Free
 static void qwen3_free(Qwen3GGML * m) {
     if (m->sched) ggml_backend_sched_free(m->sched);
-    if (m->backend && m->backend != m->cpu_backend) ggml_backend_free(m->backend);
-    if (m->cpu_backend) ggml_backend_free(m->cpu_backend);
+    backend_release(m->backend, m->cpu_backend);
     wctx_free(&m->wctx);
     *m = {};
 }
