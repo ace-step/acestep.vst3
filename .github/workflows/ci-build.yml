@@ -40,3 +40,37 @@ jobs:
           ./build/ace-qwen3 --help 2>&1 | head -5
           ./build/dit-vae --help 2>&1 | head -5
           ./build/quantize --help 2>&1 | head -3
+
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format clang-tidy cppcheck
+
+      - name: Check trailing whitespace
+        continue-on-error: true
+        run: |
+          if grep -rIn --exclude-dir=.git --exclude="*.md" "[[:blank:]]$" .; then
+            echo "Trailing whitespace detected!"
+            exit 1
+          fi
+
+      - name: Run clang-format (check mode)
+        run: |
+          find . \( -name '*.cpp' -o -name '*.hpp' -o -name '*.cc' -o -name '*.h' \) \
+            -exec clang-format --dry-run --Werror {} +
+      
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --error-exitcode=1 --inline-suppr \
+            --suppress=missingIncludeSystem .
+
+      - name: Run clang-tidy (basic checks)
+        run: |
+          find . \( -name '*.cpp' -o -name '*.cc' \) -print0 | xargs -0 -n1 clang-tidy || true
