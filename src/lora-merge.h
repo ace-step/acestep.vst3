@@ -42,26 +42,36 @@ static bool lora_to_f32(const void * src, float * dst, int64_t n, const std::str
     return true;
 }
 
-// Map a PEFT LoRA safetensors key to the GGUF base tensor name.
+// Map a LoRA safetensors key to the GGUF base tensor name.
 //
-// PEFT keys look like:
-//   base_model.model.layers.0.self_attn.q_proj.lora_A.default.weight
-//   base_model.model.layers.0.self_attn.q_proj.lora_A.weight
-//   layers.0.self_attn.q_proj.lora_B.weight   (some exports omit prefix)
+// Supported key formats (all map to GGUF "decoder.layers.0.self_attn.q_proj.weight"):
 //
-// GGUF names look like:
-//   decoder.layers.0.self_attn.q_proj.weight
+//   PEFT adapter_model.safetensors:
+//     base_model.model.layers.0.self_attn.q_proj.lora_A.default.weight
+//     base_model.model.layers.0.self_attn.q_proj.lora_A.weight
 //
-// Steps: strip "base_model.model.", extract module path before ".lora_",
+//   ComfyUI single-file (no prefix):
+//     layers.0.self_attn.q_proj.lora_A.weight
+//
+//   ComfyUI single-file (diffusion_model prefix):
+//     diffusion_model.layers.0.self_attn.q_proj.lora_A.weight
+//
+// Steps: strip known prefix, extract module path before ".lora_",
 // prepend "decoder." if needed, append ".weight".
 static std::string lora_base_name(const std::string & key) {
     std::string s = key;
 
-    // strip PEFT wrapper prefix
-    const char * pfx     = "base_model.model.";
-    size_t       pfx_len = strlen(pfx);
-    if (s.compare(0, pfx_len, pfx) == 0) {
-        s = s.substr(pfx_len);
+    // strip known prefixes (PEFT, ComfyUI)
+    static const char * prefixes[] = {
+        "base_model.model.",  // PEFT
+        "diffusion_model.",   // ComfyUI official ACE-Step format
+    };
+    for (const char * pfx : prefixes) {
+        size_t pfx_len = strlen(pfx);
+        if (s.compare(0, pfx_len, pfx) == 0) {
+            s = s.substr(pfx_len);
+            break;
+        }
     }
 
     // everything before ".lora_" is the module path
@@ -80,13 +90,14 @@ static std::string lora_base_name(const std::string & key) {
     return s + ".weight";
 }
 
-// Check whether a safetensors key is a lora_A or lora_B weight
+// Check whether a safetensors key is a lora_A/down or lora_B/up weight.
+// PEFT uses .lora_A. / .lora_B., ComfyUI single-file uses .lora_down. / .lora_up.
 static bool lora_is_a(const std::string & key) {
-    return key.find(".lora_A.") != std::string::npos;
+    return key.find(".lora_A.") != std::string::npos || key.find(".lora_down.") != std::string::npos;
 }
 
 static bool lora_is_b(const std::string & key) {
-    return key.find(".lora_B.") != std::string::npos;
+    return key.find(".lora_B.") != std::string::npos || key.find(".lora_up.") != std::string::npos;
 }
 
 // Read adapter_config.json for alpha. Returns alpha or 0 if not found.
@@ -217,9 +228,28 @@ static bool lora_merge(WeightCtx * wctx, const GGUFModel & gf, const char * lora
     // read alpha from adapter_config.json (0 means not found)
     int alpha_cfg = lora_read_alpha(dir.c_str());
 
-    // group lora_A and lora_B entries by their GGUF base tensor name
+    // group lora_A and lora_B entries by their GGUF base tensor name.
+    // also collect per-tensor alpha scalars (ComfyUI baked format).
     std::map<std::string, const STEntry *> a_map, b_map;
+    std::map<std::string, float>           alpha_map;
     for (const auto & e : st.entries) {
+        // per-tensor alpha: "base_model.model.layers.0.self_attn.q_proj.alpha"
+        // scalar F32 with shape [] containing the baked alpha value
+        const char * alpha_suffix = ".alpha";
+        size_t       slen         = strlen(alpha_suffix);
+        if (e.name.size() > slen && e.name.compare(e.name.size() - slen, slen, alpha_suffix) == 0 && e.dtype == "F32" &&
+            e.n_dims == 0) {
+            // build GGUF base name from the alpha key (strip suffix, reuse prefix logic)
+            std::string fake_key = e.name.substr(0, e.name.size() - slen) + ".lora_.x";
+            std::string base     = lora_base_name(fake_key);
+            if (!base.empty()) {
+                float val = 0.0f;
+                memcpy(&val, st_data(st, e), sizeof(float));
+                alpha_map[base] = val;
+            }
+            continue;
+        }
+
         std::string base = lora_base_name(e.name);
         if (base.empty()) {
             continue;
@@ -298,9 +328,17 @@ static bool lora_merge(WeightCtx * wctx, const GGUFModel & gf, const char * lora
             continue;
         }
 
-        // alpha: prefer config, fallback to rank (scaling = 1.0)
-        int   alpha   = (alpha_cfg > 0) ? alpha_cfg : (int) rank;
-        float scaling = ((float) alpha / (float) rank) * scale;
+        // alpha: prefer per-tensor (ComfyUI baked), then config, fallback to rank
+        float alpha;
+        auto  alpha_it = alpha_map.find(gguf_name);
+        if (alpha_it != alpha_map.end()) {
+            alpha = alpha_it->second;
+        } else if (alpha_cfg > 0) {
+            alpha = (float) alpha_cfg;
+        } else {
+            alpha = (float) rank;
+        }
+        float scaling = (alpha / (float) rank) * scale;
 
         // convert LoRA A and B to F32
         int64_t            a_nel = rank * in_feat;

@@ -107,15 +107,24 @@ EOF
     --vae models/vae-BF16.gguf
 ```
 
-With a LoRA adapter (PEFT safetensors):
+With a LoRA adapter (PEFT directory or ComfyUI single file):
 
 ```bash
+# PEFT directory (contains adapter_model.safetensors + adapter_config.json)
 ./build/dit-vae \
     --request /tmp/request0.json \
     --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
     --dit models/acestep-v15-turbo-Q8_0.gguf \
     --vae models/vae-BF16.gguf \
     --lora /path/to/lora-adapter
+
+# ComfyUI single .safetensors file (alpha baked in, no config needed)
+./build/dit-vae \
+    --request /tmp/request0.json \
+    --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
+    --dit models/acestep-v15-turbo-Q8_0.gguf \
+    --vae models/vae-BF16.gguf \
+    --lora best_sft_v2_2338_comfyui.safetensors
 ```
 
 Generate multiple songs at once with `--batch`:
