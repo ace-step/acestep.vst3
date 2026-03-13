@@ -214,10 +214,11 @@ static int mp3enc_encode_frame(mp3enc_t * enc, const float * pcm) {
     int nch     = enc->channels;
     int padding = mp3enc_get_padding(enc);
 
-    // Use MS stereo for stereo input (joint stereo mode)
-    // mode=1 (joint), mode_ext=2 (MS on, intensity off)
+    // MS stereo decision is deferred until after MDCT energy analysis.
+    // mode=1 (joint) allows switching M/S on or off per frame.
+    // mode=0 (stereo) would force L/R always. mode=3 (mono).
     int mode     = (nch == 1) ? 3 : 1;
-    int mode_ext = (nch == 1) ? 0 : 2;
+    int mode_ext = 0;  // set after MDCT energy analysis
 
     // Setup header
     mp3enc_header hdr;
@@ -257,30 +258,28 @@ static int mp3enc_encode_frame(mp3enc_t * enc, const float * pcm) {
     // Total main_data bits: this frame's area + reservoir from previous frame
     int total_md_bits = main_data_bits + resv_bytes * 8;
 
-    // Mean bits per granule (from total budget)
-    int mean_bits = total_md_bits / 2;
+    // Phase 1: compute MDCT + psy for ALL granules before bit allocation.
+    // We need PE from both granules to weight the bit budget.
+    float mdct_all[2][2][576];  // [granule][channel][576 MDCT lines]
+    float saved_xmin[2][2][MP3ENC_PSY_SFB_MAX];
+    float saved_pe[2] = { 0.0f, 0.0f };
 
-    int   ix[2][2][576];    // [granule][channel][line]
-    float mdct_lr[2][576];  // MDCT output per channel before M/S transform
-
-    int total_bits_used = 0;
-    int intra_resv      = 0;  // intra-frame reservoir: bits saved by granule 0 for granule 1
+    // Accumulators for MS stereo decision
+    float energy_mid  = 0.0f;
+    float energy_side = 0.0f;
 
     for (int gr = 0; gr < 2; gr++) {
         int pcm_offset = gr * 576;
 
-        // Step 1: filterbank + MDCT for all channels
+        // filterbank + MDCT for all channels
         for (int ch = 0; ch < nch; ch++) {
             const float * ch_pcm = pcm + ch * 1152 + pcm_offset;
-
-            // Run analysis filterbank: 576 PCM samples = 18 calls of 32 samples
-            float sb_out[32];
+            float         sb_out[32];
             for (int slot = 0; slot < 18; slot++) {
                 enc->filter[ch].process(ch_pcm + slot * 32, sb_out);
                 for (int sb = 0; sb < 32; sb++) {
                     enc->sb_cur[ch][sb][slot] = sb_out[sb];
                 }
-
                 // frequency inversion: negate odd subbands at odd time slots
                 if (slot & 1) {
                     for (int sb = 1; sb < 32; sb += 2) {
@@ -288,43 +287,107 @@ static int mp3enc_encode_frame(mp3enc_t * enc, const float * pcm) {
                     }
                 }
             }
-
-            // MDCT: transform subbands to 576 frequency lines
-            mp3enc_mdct_granule(enc->sb_prev[ch], enc->sb_cur[ch], mdct_lr[ch]);
-
-            // Save current subbands as previous for next granule
+            mp3enc_mdct_granule(enc->sb_prev[ch], enc->sb_cur[ch], mdct_all[gr][ch]);
             memcpy(enc->sb_prev[ch], enc->sb_cur[ch], sizeof(enc->sb_cur[ch]));
         }
 
-        // Step 2: MS stereo transform
+        // MS stereo energy analysis (before transform, on L/R data).
+        // Accumulate mid and side energy across both granules to decide
+        // whether M/S coding is beneficial for this frame.
+        // M/S wins when L and R are correlated (side energy is small).
         if (nch == 2) {
+            for (int i = 0; i < enc->lowpass_line && i < 576; i++) {
+                float l = mdct_all[gr][0][i];
+                float r = mdct_all[gr][1][i];
+                float m = l + r;
+                float s = l - r;
+                energy_mid += m * m;
+                energy_side += s * s;
+            }
+        }
+    }
+
+    // MS stereo decision: use M/S when channels are correlated enough
+    // that the side channel is cheap to encode. FhG "almost always uses
+    // ms_stereo" (GPSYCHO docs). We use it unless side energy dominates,
+    // which means the channels are very different (rare for music).
+    bool use_ms = false;
+    if (nch == 2) {
+        // Use M/S unless side channel has more energy than mid.
+        // This is generous -- almost always enables M/S (like FhG).
+        use_ms       = (energy_side < energy_mid * 1.2f) || (energy_mid < 1e-20f);
+        mode_ext     = use_ms ? 2 : 0;
+        hdr.mode_ext = mode_ext;
+    }
+
+    // Now apply M/S transform + lowpass + psy for both granules
+    for (int gr = 0; gr < 2; gr++) {
+        // MS stereo transform
+        if (use_ms) {
             static const float ms_scale = 0.7071067811865476f;  // 1/sqrt(2)
             for (int i = 0; i < 576; i++) {
-                float l       = mdct_lr[0][i];
-                float r       = mdct_lr[1][i];
-                mdct_lr[0][i] = (l + r) * ms_scale;
-                mdct_lr[1][i] = (l - r) * ms_scale;
+                float l            = mdct_all[gr][0][i];
+                float r            = mdct_all[gr][1][i];
+                mdct_all[gr][0][i] = (l + r) * ms_scale;
+                mdct_all[gr][1][i] = (l - r) * ms_scale;
             }
         }
 
-        // Step 2b: adaptive lowpass
+        // adaptive lowpass
         for (int ch = 0; ch < nch; ch++) {
             for (int i = enc->lowpass_line; i < 576; i++) {
-                mdct_lr[ch][i] = 0.0f;
+                mdct_all[gr][ch][i] = 0.0f;
             }
         }
 
-        // Step 3: run psy for all channels before bit allocation
-        float saved_xmin[2][MP3ENC_PSY_SFB_MAX];
+        // psy: compute masking thresholds and perceptual entropy
         for (int ch = 0; ch < nch; ch++) {
-            enc->psy.compute(mdct_lr[ch], sfb_long, enc->sr_index, ch);
-            memcpy(saved_xmin[ch], enc->psy.xmin, sizeof(enc->psy.xmin));
+            enc->psy.compute(mdct_all[gr][ch], sfb_long, enc->sr_index, ch);
+            memcpy(saved_xmin[gr][ch], enc->psy.xmin, sizeof(enc->psy.xmin));
+            saved_pe[gr] += enc->psy.pe;
         }
+    }
 
-        // Step 4: bit allocation
-        int max_bits = mean_bits + intra_resv;
+    // Phase 2: PE-weighted bit allocation + quantization.
+    // Give more bits to granules with higher perceptual entropy (more complex
+    // signal). ISO 11172-3 computes PE but then ignores it for allocation;
+    // LAME uses it to drive the bit reservoir. We weight the per-granule
+    // budget proportionally to PE, clamped to avoid starving either granule.
+    int   gr_budget[2];
+    float pe_sum = saved_pe[0] + saved_pe[1];
+    if (pe_sum > 1e-6f) {
+        float frac0  = saved_pe[0] / pe_sum;
+        gr_budget[0] = (int) ((float) total_md_bits * frac0);
+        gr_budget[1] = total_md_bits - gr_budget[0];
+        // clamp: neither granule gets less than 20% or more than 80%
+        int lo       = total_md_bits / 5;
+        int hi       = total_md_bits * 4 / 5;
+        for (int gr = 0; gr < 2; gr++) {
+            if (gr_budget[gr] < lo) {
+                gr_budget[gr] = lo;
+            }
+            if (gr_budget[gr] > hi) {
+                gr_budget[gr] = hi;
+            }
+        }
+        // re-normalize after clamp
+        int clamped_sum    = gr_budget[0] + gr_budget[1];
+        int bits_to_spread = total_md_bits - clamped_sum;
+        gr_budget[0] += bits_to_spread / 2;
+        gr_budget[1] += bits_to_spread - bits_to_spread / 2;
+    } else {
+        gr_budget[0] = total_md_bits / 2;
+        gr_budget[1] = total_md_bits - gr_budget[0];
+    }
 
-        // Don't exceed remaining budget
+    int ix[2][2][576];
+    int total_bits_used = 0;
+    int intra_resv      = 0;
+
+    for (int gr = 0; gr < 2; gr++) {
+        int max_bits = gr_budget[gr] + intra_resv;
+
+        // don't exceed remaining budget
         int remaining_bits = total_md_bits - total_bits_used;
         if (max_bits > remaining_bits) {
             max_bits = remaining_bits;
@@ -335,17 +398,16 @@ static int mp3enc_encode_frame(mp3enc_t * enc, const float * pcm) {
 
         int bits_per_ch = max_bits / nch;
 
-        // Step 5: quantize each channel with saved thresholds
+        // quantize each channel with psy thresholds
         int gr_bits_used = 0;
         for (int ch = 0; ch < nch; ch++) {
-            int bits = mp3enc_outer_loop(mdct_lr[ch], ix[gr][ch], si.gr[gr][ch], saved_xmin[ch], bits_per_ch, sfb_long,
-                                         enc->sr_index, gr, si.scfsi[ch]);
+            int bits = mp3enc_outer_loop(mdct_all[gr][ch], ix[gr][ch], si.gr[gr][ch], saved_xmin[gr][ch], bits_per_ch,
+                                         sfb_long, enc->sr_index, gr, si.scfsi[ch]);
             gr_bits_used += bits;
         }
 
-        // Track intra-frame savings: bits not used by this granule
-        // become available for the next granule in this frame.
-        intra_resv += mean_bits - gr_bits_used;
+        // intra-frame savings: unused bits carry to next granule
+        intra_resv += gr_budget[gr] - gr_bits_used;
         if (intra_resv < 0) {
             intra_resv = 0;
         }

@@ -489,29 +489,72 @@ static int mp3enc_outer_loop(const float *         xr,
     // Max 25 passes: enough for convergence at all bitrates.
     float               noise[22];  // 22 SFB bands before table terminator
     int                 best_ix[576];
-    mp3enc_granule_info best_gi    = gi;
-    int                 best_total = gi.part2_3_length;
-    int                 best_over  = 21;  // start pessimistic
+    mp3enc_granule_info best_gi     = gi;
+    int                 best_total  = gi.part2_3_length;
+    int                 best_over   = 21;      // start pessimistic
+    float               best_max_db = 999.0f;  // worst-band noise in dB over threshold
+    float               best_tot_db = 999.0f;  // total over-threshold noise in dB
     memcpy(best_ix, ix, sizeof(best_ix));
 
     for (int iter = 0; iter < 25; iter++) {
         // Compute noise per SFB with current quantization
         mp3enc_calc_noise(xr, ix, gi.global_gain, gi.scalefac_l, gi.scalefac_scale, gi.preflag, sfb_table, noise);
 
-        // Count bands over threshold
-        int over_count = 0;
+        // Compute noise metrics for 3-axis comparison (GPSYCHO approach).
+        // Instead of just counting bands over threshold, track:
+        //   - max_over_db: worst violation in dB (peak distortion)
+        //   - tot_over_db: sum of violations in dB (for average)
+        //   - over_count:  number of distorted bands
+        // This prefers solutions that minimize peak distortion and spread
+        // remaining noise evenly, rather than concentrating it in one band.
+        int   over_count  = 0;
+        float max_over_db = 0.0f;
+        float tot_over_db = 0.0f;
+
         for (int sfb = 0; sfb < 21; sfb++) {
             if (xmin[sfb] > 0.0f && noise[sfb] > xmin[sfb]) {
                 over_count++;
+                float over_db = 10.0f * log10f(noise[sfb] / xmin[sfb]);
+                tot_over_db += over_db;
+                if (over_db > max_over_db) {
+                    max_over_db = over_db;
+                }
             }
         }
 
-        // Track best result: prefer fewer over-threshold bands,
-        // then fewer total bits as tiebreaker.
-        if (over_count < best_over || (over_count == best_over && gi.part2_3_length < best_total)) {
-            best_gi    = gi;
-            best_total = gi.part2_3_length;
-            best_over  = over_count;
+        // 3-axis quant_compare (inspired by LAME GPSYCHO outer_loop):
+        //   1. Clean (over=0) always beats dirty (over>0)
+        //   2. Among clean solutions: prefer fewer bits
+        //   3. Among dirty solutions: minimize peak, then average, then count
+        bool is_better = false;
+        if (over_count == 0 && best_over > 0) {
+            is_better = true;
+        } else if (over_count == 0 && best_over == 0) {
+            is_better = (gi.part2_3_length < best_total);
+        } else if (over_count > 0 && best_over > 0) {
+            // both dirty: compare peak distortion first
+            if (max_over_db < best_max_db - 0.5f) {
+                // significantly lower peak -> better
+                is_better = true;
+            } else if (max_over_db < best_max_db + 0.5f) {
+                // similar peak: compare average violation
+                float avg      = tot_over_db / (float) over_count;
+                float best_avg = (best_over > 0) ? best_tot_db / (float) best_over : 0.0f;
+                if (avg < best_avg - 0.3f) {
+                    is_better = true;
+                } else if (avg < best_avg + 0.3f) {
+                    // similar average: prefer fewer violated bands
+                    is_better = (over_count < best_over);
+                }
+            }
+        }
+
+        if (is_better) {
+            best_gi     = gi;
+            best_total  = gi.part2_3_length;
+            best_over   = over_count;
+            best_max_db = max_over_db;
+            best_tot_db = tot_over_db;
             memcpy(best_ix, ix, sizeof(best_ix));
         }
 
