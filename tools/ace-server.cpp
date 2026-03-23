@@ -256,9 +256,10 @@ static void handle_lm(const httplib::Request & req, httplib::Response & res) {
 //     part "request": JSON text
 //     part "audio":   WAV or MP3 file
 // output: audio/mpeg (default) or audio/wav (?wav=1)
-//   batch == 1: single audio with X-Seed, X-Duration, X-Compute-Ms headers
-//   batch >  1: multipart/mixed, each part with per-part headers
+//   batch == 1: raw audio body
+//   batch >  1: multipart/mixed, each part is raw audio
 // Batch size = number of JSON objects (clamped to 1..max_batch).
+// Metadata (seed, duration, etc) is already in the request JSON from /lm.
 static void handle_synth(const httplib::Request & req, httplib::Response & res) {
     if (!g_have_synth) {
         json_error(res, 501, "synth pipeline not loaded (requires --embedding --dit --vae)");
@@ -381,7 +382,6 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
 
     // generate N tracks (single GPU graph with N samples, each with its own context)
     std::vector<AceAudio> audio(batch_n);
-    auto                  t0 = std::chrono::steady_clock::now();
     int rc           = ace_synth_generate(g_ctx_synth, ace_reqs.data(), src_interleaved, src_len, batch_n, audio.data(),
                                           server_cancel, (void *) &req.is_connection_closed);
     g_synth_last_use = std::chrono::steady_clock::now();
@@ -396,21 +396,16 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         return;
     }
 
-    float compute_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
-
     // output format: ?wav=1 for WAV, default MP3
     bool         output_wav = req.has_param("wav") && req.get_param_value("wav") == "1";
     const char * mime       = output_wav ? "audio/wav" : "audio/mpeg";
 
     // encode each track (peak normalize + encode)
     std::vector<std::string> encoded(batch_n);
-    std::vector<float>       durations(batch_n);
     for (int b = 0; b < batch_n; b++) {
         if (!audio[b].samples) {
-            durations[b] = 0.0f;
             continue;
         }
-        durations[b] = (float) audio[b].n_samples / 48000.0f;
 
         // peak normalize to 0 dBFS
         int   n_total = audio[b].n_samples * 2;
@@ -437,26 +432,17 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         ace_audio_free(&audio[b]);
     }
 
-    // single track response
+    // single track: raw audio body
     if (batch_n == 1) {
         if (encoded[0].empty()) {
             json_error(res, 500, "audio encoding failed");
             return;
         }
-
-        char val[64];
-        snprintf(val, sizeof(val), "%lld", (long long) ace_reqs[0].seed);
-        res.set_header("X-Seed", val);
-        snprintf(val, sizeof(val), "%.2f", durations[0]);
-        res.set_header("X-Duration", val);
-        snprintf(val, sizeof(val), "%.0f", compute_ms);
-        res.set_header("X-Compute-Ms", val);
-
         res.set_content(encoded[0], mime);
         return;
     }
 
-    // multiple tracks: multipart/mixed
+    // multiple tracks: multipart/mixed, each part is raw audio
     std::string boundary = "ace-batch-boundary";
     std::string body;
 
@@ -464,16 +450,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         body += "--" + boundary + "\r\n";
         body += "Content-Type: ";
         body += mime;
-        body += "\r\n";
-
-        char hdr[256];
-        snprintf(hdr, sizeof(hdr), "X-Seed: %lld\r\n", (long long) ace_reqs[b].seed);
-        body += hdr;
-        snprintf(hdr, sizeof(hdr), "X-Duration: %.2f\r\n", durations[b]);
-        body += hdr;
-        snprintf(hdr, sizeof(hdr), "X-Compute-Ms: %.0f\r\n", compute_ms);
-        body += hdr;
-        body += "\r\n";
+        body += "\r\n\r\n";
         body += encoded[b];
         body += "\r\n";
     }

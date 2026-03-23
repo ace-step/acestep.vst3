@@ -26,7 +26,7 @@ def post_json(endpoint, data):
 
 
 def parse_multipart_mixed(data, content_type):
-    """Parse multipart/mixed response into list of (headers_dict, body_bytes)."""
+    """Parse multipart/mixed response into list of body bytes."""
     boundary = None
     for part in content_type.split(";"):
         part = part.strip()
@@ -49,17 +49,10 @@ def parse_multipart_mixed(data, content_type):
         sep = chunk.find(b"\r\n\r\n")
         if sep < 0:
             continue
-        header_block = chunk[:sep].decode()
         body = chunk[sep + 4:]
         if body.endswith(b"\r\n"):
             body = body[:-2]
-
-        headers = {}
-        for line in header_block.split("\r\n"):
-            if ":" in line:
-                k, v = line.split(":", 1)
-                headers[k.strip()] = v.strip()
-        parts.append((headers, body))
+        parts.append(body)
 
     return parts
 
@@ -97,15 +90,12 @@ with urllib.request.urlopen(req) as resp:
 
 if "multipart/mixed" in content_type:
     parts = parse_multipart_mixed(resp_data, content_type)
-    for i, (headers, mp3_data) in enumerate(parts):
+    for i, mp3_data in enumerate(parts):
         path = "server-batch%d.mp3" % i
         with open(path, "wb") as f:
             f.write(mp3_data)
-        seed = headers.get("X-Seed", "?")
-        dur = headers.get("X-Duration", "?")
-        print("  -> %s (%s bytes, seed=%s, dur=%ss)" % (path, len(mp3_data), seed, dur))
+        print("  -> %s (%d bytes)" % (path, len(mp3_data)))
 else:
-    # single track (batch was clamped to 1)
     path = "server-batch0.mp3"
     with open(path, "wb") as f:
         f.write(resp_data)

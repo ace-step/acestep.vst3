@@ -45,7 +45,6 @@ export interface Song {
 	caption: string;
 	seed: number;
 	duration: number;
-	computeMs: number;
 	request: AceRequest;
 	audio: Blob;
 }

@@ -604,8 +604,9 @@ a single `application/json` object for one track, or `multipart/form-data`
 with a `request` part (JSON) and an `audio` part (WAV or MP3) for
 cover/repaint/lego. Array length is clamped to `1..max_batch`.
 Response format depends on batch size:
-batch=1: single audio body with headers `X-Seed`, `X-Duration`, `X-Compute-Ms`.
-batch>1: `Content-Type: multipart/mixed`, each part with per-part headers.
+batch=1: raw audio body.
+batch>1: `Content-Type: multipart/mixed`, each part is raw audio.
+Metadata (seed, duration, etc) is already in the request JSON from /lm.
 Requires `--embedding --dit --vae`.
 
 **POST /understand** runs the reverse pipeline (audio -> metadata + lyrics + codes)

@@ -144,21 +144,20 @@
 			// unwrap Svelte proxies (IndexedDB structuredClone and JSON.stringify need plain objects)
 			const reqs: AceRequest[] =
 				app.pendingRequests.length > 0 ? $state.snapshot(app.pendingRequests) : [buildRequest()];
-			const results = await synthGenerate(reqs, app.format);
+			const blobs = await synthGenerate(reqs, app.format);
 			const now = Date.now();
 			const baseName = app.name || 'Untitled';
-			for (let i = results.length - 1; i >= 0; i--) {
-				const r = results[i];
+			for (let i = blobs.length - 1; i >= 0; i--) {
+				const r = reqs[i < reqs.length ? i : 0];
 				const song = {
 					name: baseName,
 					format: app.format,
 					created: now + i,
-					caption: reqs[i < reqs.length ? i : 0].caption,
-					seed: r.seed,
-					duration: r.duration,
-					computeMs: r.computeMs,
-					request: reqs[i < reqs.length ? i : 0],
-					audio: r.audio
+					caption: r.caption,
+					seed: r.seed || 0,
+					duration: r.duration || 0,
+					request: r,
+					audio: blobs[i]
 				} as Song;
 				song.id = await putSong(song);
 				app.songs.unshift(song);

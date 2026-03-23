@@ -16,15 +16,9 @@ export async function lmGenerate(req: AceRequest): Promise<AceRequest[]> {
 	return res.json();
 }
 
-// POST synth[?wav=1]: enriched request -> audio blob(s) + headers
-export interface SynthResult {
-	audio: Blob;
-	seed: number;
-	duration: number;
-	computeMs: number;
-}
-
-export async function synthGenerate(reqs: AceRequest[], format: string): Promise<SynthResult[]> {
+// POST synth[?wav=1]: request(s) -> audio blob(s)
+// Metadata (seed, duration, etc) is already in the request JSON from /lm.
+export async function synthGenerate(reqs: AceRequest[], format: string): Promise<Blob[]> {
 	const url = format === 'wav' ? 'synth?wav=1' : 'synth';
 	const body = reqs.length === 1 ? JSON.stringify(reqs[0]) : JSON.stringify(reqs);
 	const res = await fetch(url, {
@@ -40,44 +34,24 @@ export async function synthGenerate(reqs: AceRequest[], format: string): Promise
 
 	const ct = res.headers.get('Content-Type') || '';
 
-	// single track: headers on the response itself
+	// single track: raw audio body
 	if (!ct.startsWith('multipart/')) {
-		return [
-			{
-				audio: await res.blob(),
-				seed: Number(res.headers.get('X-Seed') || 0),
-				duration: Number(res.headers.get('X-Duration') || 0),
-				computeMs: Number(res.headers.get('X-Compute-Ms') || 0)
-			}
-		];
+		return [await res.blob()];
 	}
 
-	// batch: multipart/mixed with per-part headers
+	// batch: multipart/mixed, each part is raw audio
 	const match = ct.match(/boundary=([^\s;]+)/);
 	if (!match) throw new Error('Missing boundary in multipart response');
 	const mime = format === 'wav' ? 'audio/wav' : 'audio/mpeg';
 	return parseMultipart(new Uint8Array(await res.arrayBuffer()), match[1], mime);
 }
 
-// parse a header value from a block of MIME headers
-function getHeader(headers: string, name: string): string {
-	for (const line of headers.split('\r\n')) {
-		const colon = line.indexOf(':');
-		if (colon < 0) continue;
-		if (line.substring(0, colon).trim().toLowerCase() === name.toLowerCase()) {
-			return line.substring(colon + 1).trim();
-		}
-	}
-	return '';
-}
-
-// parse multipart/mixed binary response into SynthResult[].
-// each part has text headers (X-Seed, X-Duration, X-Compute-Ms) and a binary body.
-function parseMultipart(buf: Uint8Array, boundary: string, mime: string): SynthResult[] {
+// parse multipart/mixed binary response into Blob[].
+// each part has only Content-Type header + raw audio body.
+function parseMultipart(buf: Uint8Array, boundary: string, mime: string): Blob[] {
 	const enc = new TextEncoder();
-	const dec = new TextDecoder();
 	const delim = enc.encode('--' + boundary);
-	const results: SynthResult[] = [];
+	const results: Blob[] = [];
 
 	// find all boundary positions
 	const positions: number[] = [];
@@ -92,12 +66,8 @@ function parseMultipart(buf: Uint8Array, boundary: string, mime: string): SynthR
 		if (ok) positions.push(i);
 	}
 
-	// each consecutive pair of boundaries delimits one part.
-	// after the boundary marker: \r\n (part) or -- (end sentinel).
 	for (let p = 0; p < positions.length - 1; p++) {
-		// skip "--boundary\r\n" to get to part content
 		const partStart = positions[p] + delim.length + 2;
-		// part ends at "\r\n" before next boundary
 		const partEnd = positions[p + 1] - 2;
 		if (partStart >= partEnd) continue;
 
@@ -111,15 +81,8 @@ function parseMultipart(buf: Uint8Array, boundary: string, mime: string): SynthR
 		}
 		if (splitAt < 0) continue;
 
-		const headers = dec.decode(buf.slice(partStart, splitAt));
 		const body = buf.slice(splitAt + 4, partEnd);
-
-		results.push({
-			audio: new Blob([body], { type: mime }),
-			seed: Number(getHeader(headers, 'X-Seed') || 0),
-			duration: Number(getHeader(headers, 'X-Duration') || 0),
-			computeMs: Number(getHeader(headers, 'X-Compute-Ms') || 0)
-		});
+		results.push(new Blob([body], { type: mime }));
 	}
 
 	return results;
