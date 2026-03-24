@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACE-Step VST3</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-left">
+      <span class="header-title">acestep.vst3</span>
+      <span class="status-dot" id="statusDot" title="Disconnected"></span>
+      <span class="status-text" id="statusText">offline</span>
+    </div>
+    <div class="header-controls">
+      <label class="toggle-label">
+        <input type="checkbox" id="darkToggle"> Dark
+      </label>
+      <select id="formatSelect" class="format-select">
+        <option value="mp3">MP3</option>
+        <option value="wav">WAV</option>
+      </select>
+      <div class="volume-control">
+        <svg class="icon" viewBox="0 0 24 24" width="16" height="16">
+          <path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.5v7a4.47 4.47 0 0 0 2.5-3.5zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/>
+        </svg>
+        <input type="range" id="volumeSlider" min="0" max="100" value="80" class="slider">
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <aside class="sidebar">
+      <div class="toolbar">
+        <button class="toolbar-btn" id="btnOpen">
+          <svg class="icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2z"/></svg>
+          Open
+        </button>
+        <button class="toolbar-btn" id="btnSave">
+          <svg class="icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 16l4-5h-3V4h-2v7H8l4 5zm-7 2v2h14v-2H5z"/></svg>
+          Save
+        </button>
+        <button class="toolbar-btn" id="btnReset">
+          <svg class="icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M17.65 6.35A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L14 10h6V4l-2.35 2.35z"/></svg>
+          Reset
+        </button>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Caption</label>
+        <textarea id="captionInput" class="field-textarea" rows="5"
+          placeholder="Describe the song style, instruments, mood..."></textarea>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Lyrics</label>
+        <textarea id="lyricsInput" class="field-textarea" rows="5"
+          placeholder="Write lyrics with [Section] tags..."></textarea>
+      </div>
+
+      <details class="metadata-section" open>
+        <summary class="metadata-toggle">Metadata</summary>
+        <div class="metadata-grid">
+          <div class="meta-field">
+            <label class="meta-label">Language</label>
+            <input type="text" id="metaLanguage" class="meta-input" placeholder="en">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">BPM</label>
+            <input type="number" id="metaBpm" class="meta-input" placeholder="0 = auto">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">Duration</label>
+            <input type="number" id="metaDuration" class="meta-input" value="30">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">Key</label>
+            <input type="text" id="metaKey" class="meta-input" placeholder="C major">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">Time sig</label>
+            <input type="text" id="metaTimeSig" class="meta-input" placeholder="4/4">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">Seed</label>
+            <input type="number" id="metaSeed" class="meta-input" value="-1" placeholder="-1 = random">
+          </div>
+        </div>
+      </details>
+
+      <details class="metadata-section">
+        <summary class="metadata-toggle">Advanced</summary>
+        <div class="metadata-grid">
+          <div class="meta-field">
+            <label class="meta-label">Batch size</label>
+            <input type="number" id="metaBatch" class="meta-input" value="1" min="1" max="8">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">LM temp</label>
+            <input type="number" id="metaLmTemp" class="meta-input" value="0.85" step="0.05">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">CFG scale</label>
+            <input type="number" id="metaCfg" class="meta-input" value="2.0" step="0.1">
+          </div>
+          <div class="meta-field">
+            <label class="meta-label">CoT caption</label>
+            <select id="metaCot" class="meta-input">
+              <option value="true" selected>Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+        </div>
+      </details>
+
+      <button class="generate-btn" id="btnGenerate">Generate</button>
+    </aside>
+
+    <section class="track-list" id="trackList">
+      <div class="empty-state" id="emptyState">
+        <svg viewBox="0 0 24 24" width="48" height="48" opacity="0.3">
+          <path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+        </svg>
+        <p>No tracks yet. Generate audio to begin.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="waveform.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
