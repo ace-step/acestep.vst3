@@ -161,7 +161,7 @@ body {
 
 /* ── Main layout ────────────────────────────────── */
 
-.main { display: flex; height: calc(100vh - 36px); }
+.main { display: flex; height: calc(100vh - 36px - 24px); }
 
 /* ── Sidebar ────────────────────────────────────── */
 
@@ -423,6 +423,38 @@ details[open] .metadata-toggle::before { transform: rotate(90deg); }
 .toast.visible {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+/* ── Help footer ────────────────────────────────── */
+
+.help-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-light);
+  font-size: 10px;
+  z-index: 50;
+}
+
+.help-footer a {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.help-footer a:hover { color: var(--accent); }
+
+.help-footer .sep {
+  width: 1px;
+  height: 10px;
+  background: var(--border);
 }
 
 /* ── Scrollbar ──────────────────────────────────── */

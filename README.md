@@ -1,7 +1,140 @@
-# acestep.cpp
+# acestep.vst3
 
-Portable C++17 implementation of ACE-Step 1.5 music generation using GGML.
-Text + lyrics in, stereo 48kHz MP3 or WAV out. Runs on CPU, CUDA, ROCm, Metal, Vulkan.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#build)
+[![Based on](https://img.shields.io/badge/Based%20on-acestep.cpp-green.svg)](https://github.com/ServeurpersoCom/acestep.cpp)
+
+**Official VST3 plugin for ACE-Step 1.5 music generation.** Text + lyrics in, stereo 48kHz MP3/WAV out. Runs natively in your DAW on CPU, CUDA, Metal, Vulkan.
+
+Built on [acestep.cpp](https://github.com/ServeurpersoCom/acestep.cpp) (C++17/GGML) with an added JUCE 8 VST3 plugin and Ableton-inspired web UI.
+
+---
+
+## What's Inside
+
+| Component | Description |
+|-----------|-------------|
+| **ace-server** | HTTP server with built-in Svelte web UI. Endpoints: `/props`, `/lm`, `/synth`, `/understand` |
+| **VST3 Plugin** | JUCE 8 VST3 instrument plugin (`plugins/acestep_vst3/`) for Reaper, Ableton, etc. |
+| **VST3 Web UI** | Ableton-inspired minimalist UI (`tools/webui-vst3/`) compatible with ace-server API |
+| **ace-lm** | Standalone LM pipeline (prompt enrichment + lyrics generation) |
+| **ace-synth** | Standalone synthesis pipeline (DiT + VAE) |
+| **ace-understand** | Reverse pipeline (audio to metadata/lyrics) |
+
+## Quick Start
+
+### 1. Build
+
+```bash
+git clone https://github.com/ace-step/acestep.vst3.git
+cd acestep.vst3
+git submodule update --init
+mkdir build && cd build
+cmake ..                        # macOS (Metal auto-enabled)
+# cmake .. -DGGML_CUDA=ON      # Linux NVIDIA
+# cmake .. -DGGML_VULKAN=ON    # Linux Vulkan
+cmake --build . --config Release -j$(nproc)
+```
+
+### 2. Download Models (~7.7 GB)
+
+```bash
+pip install hf
+./models.sh     # Downloads Q8_0 turbo essentials
+```
+
+| Model | Arch | Size |
+|-------|------|------|
+| Qwen3-Embedding-0.6B-Q8_0.gguf | Text Encoder | 748 MB |
+| acestep-5Hz-lm-4B-Q8_0.gguf | Language Model (4B) | 4.2 GB |
+| acestep-v15-turbo-Q8_0.gguf | DiT (Turbo, 8 steps) | 2.4 GB |
+| vae-BF16.gguf | VAE Decoder | 322 MB |
+
+### 3. Run Server + Web UI
+
+```bash
+# Start ace-server (all pipelines)
+./build/ace-server \
+  --lm models/acestep-5Hz-lm-4B-Q8_0.gguf \
+  --embedding models/Qwen3-Embedding-0.6B-Q8_0.gguf \
+  --dit models/acestep-v15-turbo-Q8_0.gguf \
+  --vae models/vae-BF16.gguf \
+  --port 8080
+
+# Built-in Svelte UI: http://localhost:8080
+```
+
+### 4. VST3 Web UI (Alternative)
+
+```bash
+# Ableton-inspired minimalist UI with proxy to ace-server
+python3 tools/webui-vst3/proxy.py
+# Open http://localhost:8085
+```
+
+### 5. VST3 Plugin (DAW)
+
+```bash
+# Build the JUCE VST3 plugin
+cmake -S plugins/acestep_vst3 -B build/vst3
+cmake --build build/vst3 --config Release
+# Copy .vst3 to your DAW plugin folder
+```
+
+## VST3 Web UI Features
+
+- Ableton-inspired minimalist white theme (dark mode toggle)
+- Two-step generation: `/lm` enrichment + `/synth` audio synthesis
+- Green waveform visualization with playback cursor
+- Multi-track management (play, download, delete)
+- Real-time server health indicator
+- Metadata editing: BPM, Key, Duration, Seed, Language, Time Sig
+- Advanced controls: Batch size, LM temperature, CFG scale, CoT
+- Preset save/load via localStorage
+- Format selector: MP3 or WAV
+
+## Architecture
+
+```
+Caption + Lyrics
+       |
+  [POST /lm]  LM Pipeline (Qwen3-4B)
+       |       Enriches with metadata, lyrics, audio codes
+       v
+  AceRequest[]
+       |
+  [POST /synth]  Synth Pipeline
+       |          TextEncoder -> CondEncoder -> DiT (8 steps) -> VAE -> Audio
+       v
+  48kHz Stereo MP3/WAV
+```
+
+## API Reference
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/props` | GET | Server health, pipeline status, default config |
+| `/lm` | POST | Prompt enrichment: caption -> full AceRequest[] |
+| `/synth` | POST | Audio synthesis: AceRequest[] -> audio blob(s) |
+| `/synth?wav=1` | POST | Same as above, WAV format |
+| `/understand` | POST | Reverse: audio -> metadata + lyrics |
+
+## Links
+
+| Resource | Link |
+|----------|------|
+| ACE-Step 1.5 (Python) | [GitHub](https://github.com/ace-step/ACE-Step-1.5) |
+| acestep.cpp (upstream) | [GitHub](https://github.com/ServeurpersoCom/acestep.cpp) |
+| Awesome ACE-Step | [GitHub](https://github.com/ace-step/awesome-ace-step) |
+| Pre-quantized GGUF Models | [HuggingFace](https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF) |
+| Discord Community | [Discord](https://discord.gg/PeWDxrkdj7) |
+| ACE Studio Docs | [acestudio.ai](https://docs.acestudio.ai/) |
+
+---
+
+## acestep.cpp Reference
+
+> The following sections are inherited from the [acestep.cpp](https://github.com/ServeurpersoCom/acestep.cpp) upstream. They document the full CLI tools, model options, and advanced usage.
 
 ## Build
 
