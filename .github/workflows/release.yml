@@ -66,7 +66,14 @@ jobs:
         run: |
           ./buildall.sh
 
-      - name: Smoke test
+      - name: Verify binaries exist
+        run: |
+          for bin in ace-lm ace-synth ace-server ace-understand quantize neural-codec mp3-codec; do
+            test -x "build/$bin" || { echo "FATAL: build/$bin missing or not executable"; exit 1; }
+          done
+          echo "All 7 binaries verified."
+
+      - name: Smoke test (informational)
         continue-on-error: true
         shell: bash
         run: |
@@ -93,6 +100,9 @@ jobs:
           mkdir -p dist
           cp build/ace-* \
              build/quantize build/neural-codec build/mp3-codec build/*.so dist/
+          cp models.sh dist/ 2>/dev/null || true
+          cp -r examples dist/ 2>/dev/null || true
+          cp -r tools/webui-vst3 dist/ 2>/dev/null || true
           tar -C dist -czf "acestep-linux-x64.tar.gz" .
 
       - name: Upload to release
@@ -125,9 +135,16 @@ jobs:
           mkdir build
           cd build
           cmake ..
-          cmake --build . --config Release -j "$(nproc)"
+          cmake --build . --config Release -j "$(sysctl -n hw.ncpu)"
 
-      - name: Smoke test
+      - name: Verify binaries exist
+        run: |
+          for bin in ace-lm ace-synth ace-server ace-understand quantize neural-codec mp3-codec; do
+            test -x "build/$bin" || { echo "FATAL: build/$bin missing or not executable"; exit 1; }
+          done
+          echo "All 7 binaries verified."
+
+      - name: Smoke test (informational)
         continue-on-error: true
         shell: bash
         run: |
@@ -154,10 +171,14 @@ jobs:
           mkdir -p dist
           cd build
           for bin in ace-* quantize neural-codec mp3-codec; do
-            install_name_tool -add_rpath @executable_path "$bin"
+            [ -x "$bin" ] && install_name_tool -add_rpath @executable_path "$bin"
           done
-          cp -P ace-* quantize neural-codec mp3-codec libacestep*.a libggml*.dylib ../dist/
+          cp -P ace-* quantize neural-codec mp3-codec ../dist/ 2>/dev/null || true
+          cp -P libacestep*.a libggml*.dylib ../dist/ 2>/dev/null || true
           cd ..
+          cp models.sh dist/ 2>/dev/null || true
+          cp -r examples dist/ 2>/dev/null || true
+          cp -r tools/webui-vst3 dist/ 2>/dev/null || true
           tar -C dist -czf "acestep-macos-arm64-metal.tar.gz" .
 
       - name: Upload to release
@@ -223,7 +244,21 @@ jobs:
             | Where-Object { $_ -match '(error|warning|FAILED|fatal)' -or $_ -eq '' } `
             | Select-Object -Last 50
 
-      - name: Smoke test
+      - name: Verify binaries exist
+        shell: pwsh
+        run: |
+          $required = @("ace-lm.exe","ace-synth.exe","ace-server.exe","ace-understand.exe","quantize.exe","neural-codec.exe","mp3-codec.exe")
+          $missing = @()
+          foreach ($bin in $required) {
+            if (-not (Test-Path "build-msvc\Release\$bin")) { $missing += $bin }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error "FATAL: Missing binaries: $($missing -join ', ')"
+            exit 1
+          }
+          Write-Host "All 7 binaries verified."
+
+      - name: Smoke test (informational)
         continue-on-error: true
         shell: bash
         run: |
@@ -251,6 +286,9 @@ jobs:
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item "build-msvc\Release\*.exe" dist\ -ErrorAction SilentlyContinue
           Copy-Item "build-msvc\Release\*.dll" dist\ -ErrorAction SilentlyContinue
+          Copy-Item "models.sh" dist\ -ErrorAction SilentlyContinue
+          Copy-Item "examples" dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "tools\webui-vst3" dist\ -Recurse -ErrorAction SilentlyContinue
           Compress-Archive -Path dist\* -DestinationPath "acestep-windows-x64.zip"
 
       - name: Upload to release
