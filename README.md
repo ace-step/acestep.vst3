@@ -119,10 +119,22 @@ Caption + Lyrics
 | `/synth?wav=1` | POST | Same as above, WAV format |
 | `/understand` | POST | Reverse: audio -> metadata + lyrics |
 
+## Model Conversion
+
+To convert custom or fine-tuned PyTorch models to GGUF format, see the **[Model Conversion Guide](docs/model-conversion.md)**.
+
+Quick summary:
+```bash
+./checkpoints.sh          # Download raw safetensors
+python3 convert.py        # Convert to BF16 GGUF
+./quantize.sh             # Quantize to Q4-Q8
+```
+
 ## Links
 
 | Resource | Link |
 |----------|------|
+| Model Conversion Guide | [docs/model-conversion.md](docs/model-conversion.md) |
 | ACE-Step 1.5 (Python) | [GitHub](https://github.com/ace-step/ACE-Step-1.5) |
 | acestep.cpp (upstream) | [GitHub](https://github.com/ServeurpersoCom/acestep.cpp) |
 | Awesome ACE-Step | [GitHub](https://github.com/ace-step/awesome-ace-step) |
