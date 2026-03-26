@@ -1,0 +1,96 @@
+name: Sync upstream acestep.cpp
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Weekly Monday 9am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Check & sync upstream
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/ServeurpersoCom/acestep.cpp.git || true
+          git fetch upstream master
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          NEW_COMMITS=$(git log HEAD..upstream/master --oneline | wc -l | tr -d ' ')
+          echo "count=$NEW_COMMITS" >> $GITHUB_OUTPUT
+          if [ "$NEW_COMMITS" -eq 0 ]; then
+            echo "Already up to date with upstream."
+          else
+            echo "$NEW_COMMITS new upstream commit(s) found."
+            echo "summary<<EOF" >> $GITHUB_OUTPUT
+            git log HEAD..upstream/master --oneline --no-decorate | head -20 >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create sync branch and merge
+        if: steps.check.outputs.count != '0'
+        id: merge
+        run: |
+          BRANCH="upstream-sync-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+
+          if git merge upstream/master --no-edit; then
+            echo "conflict=false" >> $GITHUB_OUTPUT
+          else
+            # Mark conflicts so reviewer can see them
+            git add -A
+            git commit --no-edit -m "chore: merge upstream (conflicts need manual resolution)" || true
+            echo "conflict=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push branch
+        if: steps.check.outputs.count != '0'
+        run: |
+          git push origin "${{ steps.merge.outputs.branch }}"
+
+      - name: Create pull request
+        if: steps.check.outputs.count != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONFLICT_NOTE=""
+          if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
+            CONFLICT_NOTE=$'\n\n> **Warning:** Merge conflicts were detected and need manual resolution.'
+          fi
+
+          gh pr create \
+            --title "chore: sync upstream acestep.cpp ($(date +%Y-%m-%d))" \
+            --body "$(cat <<EOF
+          ## Upstream sync
+
+          Merging **${{ steps.check.outputs.count }}** new commit(s) from [\`ServeurpersoCom/acestep.cpp\`](https://github.com/ServeurpersoCom/acestep.cpp).
+          ${CONFLICT_NOTE}
+
+          ### New upstream commits
+          \`\`\`
+          ${{ steps.check.outputs.summary }}
+          \`\`\`
+
+          ### Review checklist
+          - [ ] CI passes after merge
+          - [ ] No regressions in our additions (workflows, plugins, web UI)
+          - [ ] Changelog updated if needed
+          EOF
+          )" \
+            --base master \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --label "maintenance"

@@ -43,7 +43,9 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake build-essential pkg-config libopenblas-dev
+          sudo apt-get install -y -qq cmake build-essential pkg-config libopenblas-dev \
+            libasound2-dev libfreetype6-dev libx11-dev libxrandr-dev libxcursor-dev \
+            libxinerama-dev libgl1-mesa-dev
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -85,6 +87,17 @@ jobs:
           "$BIN/quantize"       2>&1 | head -3
           "$BIN/mp3-codec"      2>&1 | head -3
 
+      - name: Build VST3 plugin
+        run: |
+          cmake -S plugins/acestep_vst3 -B build/acestep_vst3 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/acestep_vst3 --config Release -j "$(nproc)"
+
+      - name: Verify VST3 bundle
+        run: |
+          VST3_DIR="build/acestep_vst3/acestep_vst3_artefacts/Release/VST3"
+          test -d "$VST3_DIR" || { echo "FATAL: VST3 bundle not found at $VST3_DIR"; exit 1; }
+          echo "VST3 bundle verified."
+
       - name: Resolve release tag
         id: tag
         shell: bash
@@ -103,6 +116,7 @@ jobs:
           cp models.sh dist/ 2>/dev/null || true
           cp -r examples dist/ 2>/dev/null || true
           cp -r tools/webui-vst3 dist/ 2>/dev/null || true
+          cp -r build/acestep_vst3/acestep_vst3_artefacts/Release/VST3/*.vst3 dist/ 2>/dev/null || true
           tar -C dist -czf "acestep-linux-x64.tar.gz" .
 
       - name: Upload to release
@@ -156,6 +170,17 @@ jobs:
           "$BIN/quantize"       2>&1 | head -3
           "$BIN/mp3-codec"      2>&1 | head -3
 
+      - name: Build VST3 plugin
+        run: |
+          cmake -S plugins/acestep_vst3 -B build/acestep_vst3 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/acestep_vst3 --config Release -j "$(sysctl -n hw.ncpu)"
+
+      - name: Verify VST3 bundle
+        run: |
+          VST3_DIR="build/acestep_vst3/acestep_vst3_artefacts/Release/VST3"
+          test -d "$VST3_DIR" || { echo "FATAL: VST3 bundle not found at $VST3_DIR"; exit 1; }
+          echo "VST3 bundle verified."
+
       - name: Resolve release tag
         id: tag
         shell: bash
@@ -179,6 +204,7 @@ jobs:
           cp models.sh dist/ 2>/dev/null || true
           cp -r examples dist/ 2>/dev/null || true
           cp -r tools/webui-vst3 dist/ 2>/dev/null || true
+          cp -r build/acestep_vst3/acestep_vst3_artefacts/Release/VST3/*.vst3 dist/ 2>/dev/null || true
           tar -C dist -czf "acestep-macos-arm64-metal.tar.gz" .
 
       - name: Upload to release
@@ -270,6 +296,22 @@ jobs:
           "$BIN/quantize.exe"       2>&1 | head -3
           "$BIN/mp3-codec.exe"      2>&1 | head -3
 
+      - name: Build VST3 plugin
+        shell: pwsh
+        run: |
+          cmake -S plugins/acestep_vst3 -B build-vst3 --log-level=ERROR
+          cmake --build build-vst3 --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Verify VST3 bundle
+        shell: pwsh
+        run: |
+          $vst3Dir = "build-vst3\acestep_vst3_artefacts\Release\VST3"
+          if (-not (Test-Path $vst3Dir)) {
+            Write-Error "FATAL: VST3 bundle not found at $vst3Dir"
+            exit 1
+          }
+          Write-Host "VST3 bundle verified."
+
       - name: Resolve release tag
         id: tag
         shell: bash
@@ -289,6 +331,7 @@ jobs:
           Copy-Item "models.sh" dist\ -ErrorAction SilentlyContinue
           Copy-Item "examples" dist\ -Recurse -ErrorAction SilentlyContinue
           Copy-Item "tools\webui-vst3" dist\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "build-vst3\acestep_vst3_artefacts\Release\VST3\*" dist\ -Recurse -ErrorAction SilentlyContinue
           Compress-Archive -Path dist\* -DestinationPath "acestep-windows-x64.zip"
 
       - name: Upload to release
